@@ -16,6 +16,7 @@ export async function GET() {
           why_opportunity,
           call_script,
           status,
+          feedback,
           created_at,
           updated_at,
           event:public_events(*),
@@ -27,7 +28,6 @@ export async function GET() {
       return NextResponse.json({ success: true, data });
     } catch (error: any) {
       console.error('Supabase get recommendations error, using mockDB fallback:', error);
-      // Fallback to mockDB if query fails
     }
   }
 
@@ -39,20 +39,24 @@ export async function GET() {
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, status } = body;
+    const { id, status, feedback } = body;
 
-    if (!id || !status) {
+    if (!id) {
       return NextResponse.json(
-        { success: false, error: 'Missing recommendation ID or status.' },
+        { success: false, error: 'Missing recommendation ID.' },
         { status: 400 }
       );
     }
+
+    const updateData: any = { updated_at: new Date().toISOString() };
+    if (status !== undefined) updateData.status = status;
+    if (feedback !== undefined) updateData.feedback = feedback;
 
     if (isSupabaseConfigured && supabase) {
       try {
         const { data, error } = await supabase
           .from('acquisition_recommendations')
-          .update({ status, updated_at: new Date().toISOString() })
+          .update(updateData)
           .eq('id', id)
           .select(`
             id,
@@ -62,6 +66,7 @@ export async function PATCH(request: NextRequest) {
             why_opportunity,
             call_script,
             status,
+            feedback,
             created_at,
             updated_at,
             event:public_events(*),
@@ -77,7 +82,14 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Fallback to mockDB
-    const updated = mockDB.updateRecommendationStatus(id, status);
+    let updated: any = null;
+    if (status !== undefined) {
+      updated = mockDB.updateRecommendationStatus(id, status);
+    }
+    if (feedback !== undefined) {
+      updated = mockDB.updateRecommendationFeedback(id, feedback);
+    }
+
     if (!updated) {
       return NextResponse.json(
         { success: false, error: 'Recommendation not found.' },

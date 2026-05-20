@@ -20,6 +20,8 @@ export interface PublicEvent {
   category: 'Počasí' | 'Výstavba' | 'Krimi' | 'Hasiči' | 'Podnikání';
   published_at: string;
   created_at: string;
+  guid?: string;
+  is_real_event?: boolean;
 }
 
 export interface AcquisitionRecommendation {
@@ -29,7 +31,8 @@ export interface AcquisitionRecommendation {
   agent_id?: string;
   why_opportunity: string;
   call_script: string;
-  status: 'new' | 'contacted' | 'ignored' | 'converted';
+  status: 'new' | 'called' | 'scheduled';
+  feedback?: 'positive' | 'negative' | 'none';
   created_at: string;
   updated_at: string;
   
@@ -199,7 +202,7 @@ export const mockRecommendations: AcquisitionRecommendation[] = [
     product_id: 'prod-podnikatel-pro',
     why_opportunity: 'Požár velké truhlárny v Plzni je tragická událost, která však lokálním podnikatelům připomíná reálné riziko zničení provozovny a přerušení podnikání. Pro truhláře, zámečníky a další drobné výrobce v Plzni a okolí je to impuls k revizi jejich pojistek, zejména krytí přerušení provozu (které hradí fixní náklady a ušlý zisk při odstávce).',
     call_script: '„Dobrý den, pane Marku, volám vám jako zástupce Generali pro Plzeňsko. Určitě jste slyšel o nočním požáru truhlárny na Borech, což je pro každého řemeslníka noční můra. Chci se s vámi spojit a prověřit, jak máte zabezpečenou vaši dílnu vy. Nejde jen o samotné stroje, ale hlavně o krytí tzv. přerušení provozu - abyste v případě výpadku měl z čeho platit nájem a zaměstnance. Pojďme se na to u kávy podívat, revize vás nic nestojí a může zachránit firmu.“',
-    status: 'contacted',
+    status: 'called',
     created_at: new Date(Date.now() - 36 * 3600 * 1000).toISOString(),
     updated_at: new Date(Date.now() - 36 * 3600 * 1000).toISOString()
   }
@@ -207,7 +210,7 @@ export const mockRecommendations: AcquisitionRecommendation[] = [
 
 // Helper to simulate store operations in-memory/localStorage
 class MockDBStore {
-  private key = 'generali_radar_mock_db';
+  private key = 'g_radar_mock_db';
 
   private getStore() {
     if (typeof window === 'undefined') {
@@ -264,7 +267,7 @@ class MockDBStore {
     }).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }
 
-  updateRecommendationStatus(id: string, status: 'new' | 'contacted' | 'ignored' | 'converted'): AcquisitionRecommendation | null {
+  updateRecommendationStatus(id: string, status: 'new' | 'called' | 'scheduled'): AcquisitionRecommendation | null {
     const store = this.getStore();
     const index = store.recommendations.findIndex((r: any) => r.id === id);
     if (index === -1) return null;
@@ -276,9 +279,22 @@ class MockDBStore {
     return this.getRecommendations().find(r => r.id === id) || null;
   }
 
-  addRecommendation(rec: Omit<AcquisitionRecommendation, 'id' | 'created_at' | 'updated_at'>): AcquisitionRecommendation {
+  updateRecommendationFeedback(id: string, feedback: 'positive' | 'negative' | 'none'): AcquisitionRecommendation | null {
+    const store = this.getStore();
+    const index = store.recommendations.findIndex((r: any) => r.id === id);
+    if (index === -1) return null;
+
+    store.recommendations[index].feedback = feedback;
+    store.recommendations[index].updated_at = new Date().toISOString();
+    this.saveStore(store);
+
+    return this.getRecommendations().find(r => r.id === id) || null;
+  }
+
+  addRecommendation(rec: Omit<AcquisitionRecommendation, 'id' | 'created_at' | 'updated_at' | 'feedback'> & { feedback?: 'positive' | 'negative' | 'none' }): AcquisitionRecommendation {
     const store = this.getStore();
     const newRec: AcquisitionRecommendation = {
+      feedback: 'none',
       ...rec,
       id: `rec-${Math.random().toString(36).substr(2, 9)}`,
       created_at: new Date().toISOString(),
@@ -289,9 +305,10 @@ class MockDBStore {
     return newRec;
   }
 
-  addEvent(event: Omit<PublicEvent, 'id' | 'created_at'>): PublicEvent {
+  addEvent(event: Omit<PublicEvent, 'id' | 'created_at' | 'is_real_event'> & { is_real_event?: boolean }): PublicEvent {
     const store = this.getStore();
     const newEvent: PublicEvent = {
+      is_real_event: false,
       ...event,
       id: `event-${Math.random().toString(36).substr(2, 9)}`,
       created_at: new Date().toISOString()

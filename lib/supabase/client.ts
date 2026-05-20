@@ -13,8 +13,8 @@ export const supabase = isSupabaseConfigured
 
 if (typeof window !== 'undefined') {
   if (isSupabaseConfigured) {
-    console.log('⚡ Generali Radar: Connected to Supabase Cloud Database.');
+    console.log('⚡ G-Radar: Connected to Supabase Cloud Database.');
   } else {
-    console.log('📦 Generali Radar: Running in Local Mock Mode (no Supabase keys found).');
+    console.log('📦 G-Radar: Running in Local Mock Mode (no Supabase keys found).');
   }
 }

@@ -20,9 +20,9 @@ create table public.generali_products (
 alter table public.generali_products enable row level security;
 
 -- Policies for generali_products
-create policy "Allow read access to authenticated users"
+create policy "Allow read access to all users"
   on public.generali_products for select
-  to authenticated
+  to authenticated, anon
   using (true);
 
 -- 2. Create public_events table
@@ -41,14 +41,14 @@ create table public.public_events (
 alter table public.public_events enable row level security;
 
 -- Policies for public_events
-create policy "Allow read access to authenticated users"
+create policy "Allow read access to all users"
   on public.public_events for select
-  to authenticated
+  to authenticated, anon
   using (true);
 
 create policy "Allow system service to insert events"
   on public.public_events for insert
-  to authenticated, service_role
+  to authenticated, anon, service_role
   with check (true);
 
 -- 3. Create acquisition_recommendations table
@@ -70,17 +70,17 @@ alter table public.acquisition_recommendations enable row level security;
 -- Policies for acquisition_recommendations (Agent-private data)
 create policy "Allow agents to view their own recommendations"
   on public.acquisition_recommendations for select
-  to authenticated
+  to authenticated, anon
   using (auth.uid() = agent_id or agent_id is null);
 
 create policy "Allow agents to insert recommendations"
   on public.acquisition_recommendations for insert
-  to authenticated
+  to authenticated, anon
   with check (auth.uid() = agent_id or agent_id is null);
 
 create policy "Allow agents to update their own recommendations"
   on public.acquisition_recommendations for update
-  to authenticated
+  to authenticated, anon
   using (auth.uid() = agent_id or agent_id is null)
   with check (auth.uid() = agent_id or agent_id is null);
 

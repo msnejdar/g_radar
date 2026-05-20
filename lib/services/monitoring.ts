@@ -79,32 +79,96 @@ const EVENT_TEMPLATES: EventTemplate[] = [
   }
 ];
 
-export async function simulateNewEvent(): Promise<any> {
+export async function createRecommendationForEvent(
+  eventId: string,
+  eventTitle: string,
+  eventContent: string,
+  region: string,
+  productCode: string
+): Promise<any> {
+  if (isSupabaseConfigured && supabase) {
+    // 1. Fetch product to get product_id
+    const { data: productData, error: prodErr } = await supabase
+      .from('generali_products')
+      .select('id, code, name')
+      .eq('code', productCode)
+      .single();
+      
+    if (prodErr || !productData) {
+      throw new Error(`Product not found in Supabase: ${productCode}`);
+    }
+
+    // 2. Generate recommendation (AI or Template)
+    const aiResponse = await generateRecommendation({
+      eventTitle,
+      eventContent,
+      productName: productData.name,
+      region
+    }, productCode);
+
+    // 3. Insert recommendation
+    const { data: recData, error: recErr } = await supabase
+      .from('acquisition_recommendations')
+      .insert({
+        event_id: eventId,
+        product_id: productData.id,
+        why_opportunity: aiResponse.whyOpportunity,
+        call_script: aiResponse.callScript,
+        status: 'new'
+      })
+      .select('*, event:public_events(*), product:generali_products(*)')
+      .single();
+
+    if (recErr) throw recErr;
+    return recData;
+  }
+
+  // --- MOCK DB FALLBACK ---
+  const products = mockDB.getProducts();
+  const product = products.find(p => p.code === productCode);
+  if (!product) {
+    throw new Error(`Mock product not found: ${productCode}`);
+  }
+
+  const aiResponse = await generateRecommendation({
+    eventTitle,
+    eventContent,
+    productName: product.name,
+    region
+  }, productCode);
+
+  const newRec = mockDB.addRecommendation({
+    event_id: eventId,
+    product_id: product.id,
+    why_opportunity: aiResponse.whyOpportunity,
+    call_script: aiResponse.callScript,
+    status: 'new'
+  });
+
+  const event = mockDB.getEvents().find(e => e.id === eventId);
+  newRec.event = event;
+  newRec.product = product;
+
+  return newRec;
+}
+
+export async function simulateNewEvent(preferredRegion?: string): Promise<any> {
   // 1. Choose a random template
   const template = EVENT_TEMPLATES[Math.floor(Math.random() * EVENT_TEMPLATES.length)];
   
-  // 2. Choose a random region for that template
-  const region = template.regionOptions[Math.floor(Math.random() * template.regionOptions.length)];
+  // 2. Choose a region (use preferred if defined, otherwise random from template options)
+  const region = (preferredRegion && preferredRegion !== 'Vše')
+    ? preferredRegion 
+    : template.regionOptions[Math.floor(Math.random() * template.regionOptions.length)];
   
-  // 3. Format placeholders
-  const title = template.title.replace('[REGION]', region);
-  const content = template.content.replace('[REGION]', region);
+  // 3. Format placeholders (using global regex to replace all occurrences)
+  const title = template.title.replace(/\[REGION\]/g, region);
+  const content = template.content.replace(/\[REGION\]/g, region);
   
   const publishedAt = new Date().toISOString();
 
   if (isSupabaseConfigured && supabase) {
     try {
-      // Fetch product to get product_id
-      const { data: productData, error: prodErr } = await supabase
-        .from('generali_products')
-        .select('id, code')
-        .eq('code', template.productCode)
-        .single();
-        
-      if (prodErr || !productData) {
-        throw new Error(`Product not found in Supabase: ${template.productCode}`);
-      }
-
       // Insert public event
       const { data: eventData, error: evErr } = await supabase
         .from('public_events')
@@ -114,7 +178,8 @@ export async function simulateNewEvent(): Promise<any> {
           source_url: template.sourceUrl,
           region,
           category: template.category,
-          published_at: publishedAt
+          published_at: publishedAt,
+          is_real_event: false
         })
         .select()
         .single();
@@ -123,74 +188,34 @@ export async function simulateNewEvent(): Promise<any> {
         throw evErr || new Error('Failed to insert event in Supabase');
       }
 
-      // Generate recommendation (AI or Template)
-      const aiResponse = await generateRecommendation({
-        eventTitle: title,
-        eventContent: content,
-        productName: template.productCode, // will resolve inside AI generator
-        region
-      }, template.productCode);
-
-      // Insert recommendation
-      const { data: recData, error: recErr } = await supabase
-        .from('acquisition_recommendations')
-        .insert({
-          event_id: eventData.id,
-          product_id: productData.id,
-          why_opportunity: aiResponse.whyOpportunity,
-          call_script: aiResponse.callScript,
-          status: 'new'
-        })
-        .select('*, event:public_events(*), product:generali_products(*)')
-        .single();
-
-      if (recErr) throw recErr;
-      return recData;
-
+      return await createRecommendationForEvent(
+        eventData.id,
+        title,
+        content,
+        region,
+        template.productCode
+      );
     } catch (err) {
       console.error('Error simulating event on Supabase, falling back to mockDB:', err);
-      // Fallback to mockDB on failure
     }
   }
 
   // --- MOCK DB FALLBACK ---
-  // Get product
-  const products = mockDB.getProducts();
-  const product = products.find(p => p.code === template.productCode);
-  if (!product) {
-    throw new Error(`Mock product not found: ${template.productCode}`);
-  }
-
-  // Create event
   const newEvent = mockDB.addEvent({
     title,
     content,
     source_url: template.sourceUrl,
     region,
     category: template.category,
-    published_at: publishedAt
+    published_at: publishedAt,
+    is_real_event: false
   });
 
-  // Generate recommendation (AI or Template)
-  const aiResponse = await generateRecommendation({
-    eventTitle: title,
-    eventContent: content,
-    productName: product.name,
-    region
-  }, template.productCode);
-
-  // Add recommendation
-  const newRec = mockDB.addRecommendation({
-    event_id: newEvent.id,
-    product_id: product.id,
-    why_opportunity: aiResponse.whyOpportunity,
-    call_script: aiResponse.callScript,
-    status: 'new'
-  });
-
-  // Attach joins manually for immediate UI response
-  newRec.event = newEvent;
-  newRec.product = product;
-
-  return newRec;
+  return await createRecommendationForEvent(
+    newEvent.id,
+    title,
+    content,
+    region,
+    template.productCode
+  );
 }

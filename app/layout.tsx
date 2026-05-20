@@ -13,11 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Generali Radar | Mobilní akviziční portál",
+  title: "G-Radar | Mobilní akviziční portál",
   description: "Chytrý monitoring událostí a doporučení pojistných produktů pro pojišťovací poradce v terénu.",
   appleWebApp: {
     capable: true,
-    title: "Generali Radar",
+    title: "G-Radar",
     statusBarStyle: "default",
   },
 };
