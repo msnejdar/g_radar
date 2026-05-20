@@ -11,6 +11,76 @@ export interface Lead {
   status: 'new' | 'called' | 'scheduled';
 }
 
+async function fetchRealPlacesLeads(
+  region: string,
+  productCode: string,
+  placesApiKey: string
+): Promise<any[]> {
+  try {
+    let searchTerm = 'firma';
+    switch (productCode) {
+      case 'DOMOV_KLASIK':
+        searchTerm = 'stavebniny stavební firma pokrývačství';
+        break;
+      case 'AUTO_COMPLEX':
+        searchTerm = 'autoservis autodoprava logistika';
+        break;
+      case 'PODNIKATEL_PRO':
+        searchTerm = 'truhlářství pekárna zámečnictví';
+        break;
+      case 'ODPOVEDNOST_BEX':
+        searchTerm = 'půjčovna kol sportovní potřeby';
+        break;
+      case 'ZIVOT_PROFIT':
+        searchTerm = 'advokátní kancelář účetnictví';
+        break;
+    }
+
+    // Call Google Places Text Search
+    const searchUrl = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(`${searchTerm} ${region}`)}&key=${placesApiKey}`;
+    const searchRes = await fetch(searchUrl);
+    if (!searchRes.ok) {
+      console.error('Google Places Text Search failed:', searchRes.status);
+      return [];
+    }
+
+    const searchJson = await searchRes.json();
+    const results = searchJson.results || [];
+    if (results.length === 0) return [];
+
+    // Take top 3 places
+    const topPlaces = results.slice(0, 3);
+    const leads: any[] = [];
+
+    for (const place of topPlaces) {
+      if (!place.place_id) continue;
+      
+      // Fetch details for phone and website
+      const detailsUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_phone_number,website,formatted_address&key=${placesApiKey}`;
+      const detailsRes = await fetch(detailsUrl);
+      if (detailsRes.ok) {
+        const detailsJson = await detailsRes.json();
+        if (detailsJson.status === 'OK' && detailsJson.result) {
+          const res = detailsJson.result;
+          leads.push({
+            name: res.name || 'Neznámá firma',
+            phone: res.formatted_phone_number 
+              ? (res.formatted_phone_number.startsWith('+') ? res.formatted_phone_number : `+420 ${res.formatted_phone_number}`)
+              : 'Ověřit na Google',
+            website: res.website || 'Není k dispozici',
+            address: res.formatted_address || region,
+            contact_person: 'Jednatel / Majitel'
+          });
+        }
+      }
+    }
+    return leads;
+  } catch (error) {
+    console.error('Error fetching from Google Places:', error);
+    return [];
+  }
+}
+
 export async function generateLeads(
   title: string,
   content: string,
@@ -19,42 +89,79 @@ export async function generateLeads(
   productCode: string
 ): Promise<Lead[]> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  const placesApiKey = process.env.GOOGLE_PLACES_API_KEY;
+
+  let realPlacesLeads: any[] = [];
+  if (placesApiKey) {
+    realPlacesLeads = await fetchRealPlacesLeads(region, productCode, placesApiKey);
+  }
 
   if (apiKey) {
     try {
-      const prompt = `Jsi vyhledávací agent pojišťovny Generali. Na základě veřejné události (zprávy) a pojišťovacího produktu vygeneruj 2 až 3 vysoce realistické akviziční cíle (kontakty na firmy nebo osoby) v daném regionu/okrese, které by měl pojišťovací poradce oslovit.
-      
-      Vstupní událost:
-      Název: ${title}
-      Obsah: ${content}
-      Region: ${region}
-      
-      Doporučený produkt:
-      Kód: ${productCode}
-      Název: ${productName}
+      let prompt = '';
+      if (realPlacesLeads.length > 0) {
+        prompt = `Jsi vyhledávací agent pojišťovny G-Radar. Na základě veřejné události (zprávy), doporučeného pojišťovacího produktu a seznamu reálných firem z dané oblasti, doplň pro každou firmu:
+        1. Vhodnou kontaktní osobu (např. Jednatel, Majitel, Provozní ředitel atd. - klidně odhadni pozici)
+        2. Proč je právě tato konkrétní firma skvělým akvizičním cílem (why_target) vzhledem k události a doporučenému produktu. Nevymýšlej si prodejní argumenty nesouvisející s událostí a produktem.
 
-      STRIKTNÍ PRAVIDLO PRO TELEFONNÍ ČÍSLA:
-      AI nesmí vymýšlet (halucinovat) náhodná mobilní ani pevná telefonní čísla. Pokud s jistotou neznáš reálné, veřejně publikované číslo daného subjektu, ulož do pole "phone" text "Ověřit na Google".
+        Vstupní událost:
+        Název: ${title}
+        Obsah: ${content}
+        Region: ${region}
+        
+        Doporučený produkt:
+        Kód: ${productCode}
+        Název: ${productName}
 
-      Pro každý cíl uveď:
-      - Název firmy nebo jméno osoby (name)
-      - Kontaktní osoba včetně pracovní pozice (contact_person)
-      - Telefonní číslo (phone) - buď prokazatelně reálné, nebo přesný řetězec "Ověřit na Google"
-      - Webová stránka nebo e-mail (website)
-      - Adresa v daném regionu (address), která odpovídá městům/obcím z regionu ${region}
-      - Proč tento cíl oslovit v souvislosti s událostí a produktem (why_target)
+        Seznam reálných firem získaných z Google Places:
+        ${JSON.stringify(realPlacesLeads)}
 
-      Odpověz striktně ve formátu JSON jako pole objektů s následující strukturou (nepoužívej žádný markdown obal kromě čistého JSONu, nepiš žádné řeči okolo):
-      [
-        {
-          "name": "Název firmy nebo jméno",
-          "contact_person": "Jméno a pozice",
-          "phone": "Telefonní číslo nebo 'Ověřit na Google'",
-          "website": "www...",
-          "address": "ulice, město, PSČ",
-          "why_target": "Stručné vysvětlení vztahu k incidentu a proč oslovit právě teď"
-        }
-      ]`;
+        Odpověz striktně ve formátu JSON jako pole objektů s následující strukturou (přesně zachovej pole name, phone, website, address a doplň contact_person a why_target, nepoužívej žádný markdown obal kromě čistého JSONu):
+        [
+          {
+            "name": "Název firmy",
+            "phone": "Původní telefon",
+            "website": "Původní web",
+            "address": "Původní adresa",
+            "contact_person": "Jméno/Pozice",
+            "why_target": "Proč oslovit v souvislosti s incidentem a produktem"
+          }
+        ]`;
+      } else {
+        prompt = `Jsi vyhledávací agent pojišťovny Generali. Na základě veřejné události (zprávy) a pojišťovacího produktu vygeneruj 2 až 3 vysoce realistické akviziční cíle (kontakty na firmy nebo osoby) v daném regionu/okrese, které by měl pojišťovací poradce oslovit.
+        
+        Vstupní událost:
+        Název: ${title}
+        Obsah: ${content}
+        Region: ${region}
+        
+        Doporučený produkt:
+        Kód: ${productCode}
+        Název: ${productName}
+
+        STRIKTNÍ PRAVIDLO PRO TELEFONNÍ ČÍSLA:
+        AI nesmí vymýšlet (halucinovat) náhodná mobilní ani pevná telefonní čísla. Pokud s jistotou neznáš reálné, veřejně publikované číslo daného subjektu, ulož do pole "phone" text "Ověřit na Google".
+
+        Pro každý cíl uveď:
+        - Název firmy nebo jméno osoby (name)
+        - Kontaktní osoba včetně pracovní pozice (contact_person)
+        - Telefonní číslo (phone) - buď prokazatelně reálné, nebo přesný řetězec "Ověřit na Google"
+        - Webová stránka nebo e-mail (website)
+        - Adresa v daném regionu (address), která odpovídá městům/obcím z regionu ${region}
+        - Proč tento cíl oslovit v souvislosti s událostí a produktem (why_target)
+
+        Odpověz striktně ve formátu JSON jako pole objektů s následující strukturou (nepoužívej žádný markdown obal kromě čistého JSONu, nepiš žádné řeči okolo):
+        [
+          {
+            "name": "Název firmy nebo jméno",
+            "contact_person": "Jméno a pozice",
+            "phone": "Telefonní číslo nebo 'Ověřit na Google'",
+            "website": "www...",
+            "address": "ulice, město, PSČ",
+            "why_target": "Stručné vysvětlení vztahu k incidentu a proč oslovit právě teď"
+          }
+        ]`;
+      }
 
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
@@ -89,7 +196,7 @@ export async function generateLeads(
             return parsed.map((item: any) => ({
               name: item.name || 'Neznámý kontakt',
               contact_person: item.contact_person || 'Majitel / jednatel',
-              phone: item.phone || '+420 777 777 777',
+              phone: item.phone || 'Ověřit na Google',
               website: item.website || 'Není k dispozici',
               address: item.address || region,
               why_target: item.why_target || 'Akviziční cíl v blízkosti incidentu',
@@ -103,6 +210,15 @@ export async function generateLeads(
     } catch (error) {
       console.error('Error generating leads with Gemini:', error);
     }
+  }
+
+  // Fallback to raw Google Places leads if Gemini fails but we have them
+  if (realPlacesLeads.length > 0) {
+    return realPlacesLeads.map(lead => ({
+      ...lead,
+      why_target: `Reálná firma v oblasti ${region} vhodná pro oslovení s produktem ${productName}.`,
+      status: 'new'
+    }));
   }
 
   // --- Czech Localized Fallback Lead Generator ---
