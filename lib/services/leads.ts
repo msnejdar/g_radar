@@ -11,31 +11,84 @@ export interface Lead {
   status: 'new' | 'called' | 'scheduled';
 }
 
+async function generateSearchQueryFromEvent(
+  title: string,
+  content: string,
+  productName: string,
+  productCode: string,
+  apiKey: string
+): Promise<string> {
+  try {
+    const prompt = `Jsi analytik, který pomáhá vyhledat firmy v okolí pojistné události.
+    Na základě události a pojišťovacího produktu navrhni jedno nebo dvě konkrétní, výstižná klíčová slova v češtině pro vyhledávání firem na Google Maps, které jsou touto událostí přímo ohroženy nebo pro ně bude produkt vysoce relevantní (např. po požáru pily vyhledej "pila" nebo "truhlářství"; po krupobití aut vyhledej "autoservis" nebo "autobazar"; po požáru bytového domu vyhledej "SVJ" nebo "správa nemovitostí").
+    
+    Pravidlo: Navrhni POUZE typy podnikání/firem, které dávají smysl kontaktovat v souvislosti s touto konkrétní událostí.
+
+    Vstupní událost:
+    Název: ${title}
+    Obsah: ${content}
+    Produkt: ${productName} (kód: ${productCode})
+
+    Odpověz POUZE těmito slovy v češtině (např. "truhlářství" nebo "stavební firma"), nepoužívej žádný markdown ani omáčku.`;
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 20
+          }
+        })
+      }
+    );
+
+    if (response.ok) {
+      const json = await response.json();
+      const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        const cleanText = text.replace(/["'`. Czech]/g, '').trim();
+        if (cleanText.length > 2) {
+          return cleanText;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to generate dynamic search query:', err);
+  }
+
+  // Fallback to static product-based queries
+  switch (productCode) {
+    case 'DOMOV_KLASIK':
+      return 'stavební firma pokrývačství';
+    case 'AUTO_COMPLEX':
+      return 'autoservis autodoprava';
+    case 'PODNIKATEL_PRO':
+      return 'truhlářství pekárna';
+    case 'ODPOVEDNOST_BEX':
+      return 'půjčovna kol';
+    case 'ZIVOT_PROFIT':
+      return 'účetnictví advokátní kancelář';
+    default:
+      return 'firma';
+  }
+}
+
 async function fetchRealPlacesLeads(
   region: string,
-  productCode: string,
+  searchTerm: string,
   placesApiKey: string
 ): Promise<any[]> {
   try {
-    let searchTerm = 'firma';
-    switch (productCode) {
-      case 'DOMOV_KLASIK':
-        searchTerm = 'stavebniny stavební firma pokrývačství';
-        break;
-      case 'AUTO_COMPLEX':
-        searchTerm = 'autoservis autodoprava logistika';
-        break;
-      case 'PODNIKATEL_PRO':
-        searchTerm = 'truhlářství pekárna zámečnictví';
-        break;
-      case 'ODPOVEDNOST_BEX':
-        searchTerm = 'půjčovna kol sportovní potřeby';
-        break;
-      case 'ZIVOT_PROFIT':
-        searchTerm = 'advokátní kancelář účetnictví';
-        break;
-    }
-
     // Call Google Places Text Search
     const searchUrl = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(`${searchTerm} ${region}`)}&key=${placesApiKey}`;
     const searchRes = await fetch(searchUrl);
@@ -91,9 +144,36 @@ export async function generateLeads(
   const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
   const placesApiKey = process.env.GOOGLE_PLACES_API_KEY;
 
+  let searchTerm = '';
+  if (apiKey) {
+    searchTerm = await generateSearchQueryFromEvent(title, content, productName, productCode, apiKey);
+    console.log(`Generated dynamic search term for Google Places: "${searchTerm}"`);
+  } else {
+    // Static fallback
+    switch (productCode) {
+      case 'DOMOV_KLASIK':
+        searchTerm = 'stavební firma pokrývačství';
+        break;
+      case 'AUTO_COMPLEX':
+        searchTerm = 'autoservis autodoprava';
+        break;
+      case 'PODNIKATEL_PRO':
+        searchTerm = 'truhlářství pekárna';
+        break;
+      case 'ODPOVEDNOST_BEX':
+        searchTerm = 'půjčovna kol';
+        break;
+      case 'ZIVOT_PROFIT':
+        searchTerm = 'účetnictví advokátní kancelář';
+        break;
+      default:
+        searchTerm = 'firma';
+    }
+  }
+
   let realPlacesLeads: any[] = [];
-  if (placesApiKey) {
-    realPlacesLeads = await fetchRealPlacesLeads(region, productCode, placesApiKey);
+  if (placesApiKey && searchTerm) {
+    realPlacesLeads = await fetchRealPlacesLeads(region, searchTerm, placesApiKey);
   }
 
   if (apiKey) {
@@ -113,7 +193,7 @@ export async function generateLeads(
         Kód: ${productCode}
         Název: ${productName}
 
-        Seznam reálných firem získaných z Google Places:
+        Seznam reálných firem získaných z Google Places pro klíčové slovo "${searchTerm}":
         ${JSON.stringify(realPlacesLeads)}
 
         Odpověz striktně ve formátu JSON jako pole objektů s následující strukturou (přesně zachovej pole name, phone, website, address a doplň contact_person a why_target, nepoužívej žádný markdown obal kromě čistého JSONu):

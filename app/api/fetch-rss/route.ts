@@ -8,12 +8,40 @@ export const dynamic = 'force-dynamic';
 
 const RSS_FEEDS = [
   {
+    name: 'Požáry.cz (Hasičské zásahy v ČR)',
+    url: 'https://www.pozary.cz/rss/'
+  },
+  {
+    name: 'iDNES.cz - Krimi',
+    url: 'https://servis.idnes.cz/rss.aspx?c=krimi'
+  },
+  {
+    name: 'Novinky.cz - Krimi',
+    url: 'https://www.novinky.cz/rss/sekce/krimi'
+  },
+  {
+    name: 'Deník.cz - Krimi',
+    url: 'https://www.denik.cz/rss/krimi.html'
+  },
+  {
     name: 'iDNES Krajské zprávy (Středočeský kraj)',
     url: 'https://servis.idnes.cz/rss.aspx?c=stredocechy'
   },
   {
     name: 'Deník.cz Střední Čechy',
     url: 'https://www.denik.cz/rss/stredocesky-kraj.html'
+  },
+  {
+    name: 'Deník.cz Jihomoravský kraj',
+    url: 'https://www.denik.cz/rss/jihomoravsky-kraj.html'
+  },
+  {
+    name: 'Deník.cz Moravskoslezský kraj',
+    url: 'https://www.denik.cz/rss/moravskoslezsky-kraj.html'
+  },
+  {
+    name: 'Deník.cz Plzeňský kraj',
+    url: 'https://www.denik.cz/rss/plzensky-kraj.html'
   }
 ];
 
@@ -229,6 +257,12 @@ export async function GET() {
           continue;
         }
 
+        // Fast local pre-filter to avoid calling Gemini for non-insurable news (sports, politics, etc.)
+        const localPreFilter = classifyEventLocalFallback(title, content);
+        if (!localPreFilter.is_insurable_risk) {
+          continue;
+        }
+
         // Run Gemini 2.5 Flash / fallback classification
         const classification = await classifyEventWithGemini(title, content);
 
@@ -299,9 +333,17 @@ export async function GET() {
             recommendation
           });
           console.log(`Successfully processed insurable event: "${title}" -> recommended ${productCode}`);
+
+          if (processedEvents.length >= 5) {
+            console.log('Reached maximum processed events limit (5). Stopping this run to prevent Vercel timeout.');
+            break;
+          }
         } catch (recErr) {
           console.error(`Failed to generate recommendation for event "${title}":`, recErr);
         }
+      }
+      if (processedEvents.length >= 5) {
+        break;
       }
     } catch (feedErr) {
       console.error(`Failed to fetch or parse RSS feed ${feed.name}:`, feedErr);
