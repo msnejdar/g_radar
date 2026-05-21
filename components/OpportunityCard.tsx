@@ -40,50 +40,69 @@ export default function OpportunityCard({ recommendation, onStatusChange, onFeed
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loadingLeads, setLoadingLeads] = useState(false);
 
-  // Fetch leads dynamically when card renders/mounts
-  useEffect(() => {
-    if (!event || !product) return;
-    
-    let active = true;
-    async function fetchLeads() {
-      setLoadingLeads(true);
-      try {
-        // Read specific district setting from localStorage if it matches event's region
-        let regionParam = event?.region || '';
-        if (typeof window !== 'undefined') {
-          const storedRegion = localStorage.getItem('g_radar_region');
-          if (storedRegion && storedRegion.startsWith(regionParam)) {
-            regionParam = storedRegion;
-          }
-        }
+  // User/Agent details and search states
+  const [agentName, setAgentName] = useState('');
+  const [agentPhone, setAgentPhone] = useState('');
+  const [searchRegion, setSearchRegion] = useState('');
+  const [hasSearched, setHasSearched] = useState(false);
 
-        const params = new URLSearchParams({
-          recommendation_id: id,
-          region: regionParam,
-          title: event?.title || '',
-          content: event?.content || '',
-          product_name: product?.name || '',
-          product_code: product?.code || ''
-        });
-        const response = await fetch(`/api/leads?${params.toString()}`);
-        if (response.ok) {
-          const json = await response.json();
-          if (active && json.success) {
-            setLeads(json.data);
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching live leads:', error);
-      } finally {
-        if (active) setLoadingLeads(false);
+  // Load broker details and initial region from localStorage or event
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const storedName = localStorage.getItem('g_radar_agent_name') || '';
+      const storedPhone = localStorage.getItem('g_radar_agent_phone') || '';
+      setAgentName(storedName);
+      setAgentPhone(storedPhone);
+
+      let regionParam = event?.region || '';
+      const storedRegion = localStorage.getItem('g_radar_region');
+      if (storedRegion && storedRegion.startsWith(regionParam)) {
+        regionParam = storedRegion;
       }
+      setSearchRegion(regionParam);
+    } else {
+      setSearchRegion(event?.region || '');
+    }
+  }, [event]);
+
+  const handleSearchLeads = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!agentName.trim() || !agentPhone.trim() || !searchRegion.trim()) {
+      alert('Prosím vyplňte své jméno, telefon a okres pro vyhledávání.');
+      return;
     }
 
-    fetchLeads();
-    return () => {
-      active = false;
-    };
-  }, [id, event, product]);
+    // Save broker details and current region selection to localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('g_radar_agent_name', agentName.trim());
+      localStorage.setItem('g_radar_agent_phone', agentPhone.trim());
+      localStorage.setItem('g_radar_region', searchRegion.trim());
+    }
+
+    setLoadingLeads(true);
+    setHasSearched(true);
+    try {
+      const params = new URLSearchParams({
+        recommendation_id: id,
+        region: searchRegion,
+        title: event?.title || '',
+        content: event?.content || '',
+        product_name: product?.name || '',
+        product_code: product?.code || ''
+      });
+      const response = await fetch(`/api/leads?${params.toString()}`);
+      if (response.ok) {
+        const json = await response.json();
+        if (json.success) {
+          setLeads(json.data);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching live leads:', error);
+    } finally {
+      setLoadingLeads(false);
+    }
+  };
 
   if (!event || !product) return null;
 
@@ -148,9 +167,20 @@ export default function OpportunityCard({ recommendation, onStatusChange, onFeed
     return date.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   };
 
+  const getPersonalizedScript = () => {
+    let script = call_script;
+    if (agentName) {
+      script = script.replace(/\[Jméno poradce\]/gi, agentName);
+      script = script.replace(/\[poradce\]/gi, agentName);
+      script = script.replace(/\[obchodník\]/gi, agentName);
+    }
+    return script;
+  };
+
   const copyScript = async () => {
     try {
-      const cleanScript = call_script.replace(/^„/, '').replace(/“$/, '');
+      const personalized = getPersonalizedScript();
+      const cleanScript = personalized.replace(/^„/, '').replace(/“$/, '');
       await navigator.clipboard.writeText(cleanScript);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -357,7 +387,7 @@ export default function OpportunityCard({ recommendation, onStatusChange, onFeed
         {activeTab === 'script' && (
           <div className="relative bg-slate-50 border border-slate-100 rounded-xl p-3.5 flex flex-col gap-2">
             <p className="italic text-slate-800 pr-8 font-medium">
-              {call_script}
+              {getPersonalizedScript()}
             </p>
             <button
               onClick={copyScript}
@@ -386,104 +416,186 @@ export default function OpportunityCard({ recommendation, onStatusChange, onFeed
           </span>
         </div>
 
-        {loadingLeads ? (
-          <div className="flex flex-col gap-2">
-            <LeadSkeleton />
-            <LeadSkeleton />
-          </div>
-        ) : leads.length === 0 ? (
-          <div className="text-center py-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-400">
-            Nebyly nalezeny žádné živé kontakty v okolí.
-          </div>
+        {!hasSearched ? (
+          <form onSubmit={handleSearchLeads} className="bg-slate-50 rounded-xl p-4 border border-slate-200/80 flex flex-col gap-3.5">
+            <div className="text-xs font-semibold text-slate-700 leading-snug">
+              Pro vyhledání reálných akvizičních cílů z okolí incidentu vyplňte své údaje:
+            </div>
+            
+            <div className="flex flex-col gap-2.5">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Vaše jméno a příjmení
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="např. Mgr. Jan Novák"
+                  value={agentName}
+                  onChange={(e) => setAgentName(e.target.value)}
+                  className="w-full bg-white border border-slate-250 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-generali-red focus:border-generali-red transition placeholder:text-slate-400 font-medium text-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Váš telefonní kontakt
+                </label>
+                <input
+                  type="tel"
+                  required
+                  placeholder="např. +420 777 123 456"
+                  value={agentPhone}
+                  onChange={(e) => setAgentPhone(e.target.value)}
+                  className="w-full bg-white border border-slate-250 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-generali-red focus:border-generali-red transition placeholder:text-slate-400 font-medium text-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Okres pro vyhledávání
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="např. Mladá Boleslav"
+                  value={searchRegion}
+                  onChange={(e) => setSearchRegion(e.target.value)}
+                  className="w-full bg-white border border-slate-250 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-generali-red focus:border-generali-red transition placeholder:text-slate-400 font-medium text-slate-800"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="mt-1 w-full py-2.5 bg-generali-red hover:bg-generali-red-dark border border-transparent text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm shadow-red-500/10 active:scale-[0.98] transition cursor-pointer"
+            >
+              <Search className="w-3.5 h-3.5 text-white/80" />
+              <span>Vyhledat akviziční cíle</span>
+            </button>
+          </form>
         ) : (
-          <div className="flex flex-col gap-2">
-            {leads.map((lead, idx) => {
-              const isCalled = lead.status === 'called' || lead.status === 'scheduled';
-              return (
-                <div 
-                  key={idx}
-                  className={`p-3 rounded-xl border transition-all duration-200 ${
-                    isCalled 
-                      ? 'bg-slate-50/50 border-slate-150 opacity-75' 
-                      : 'bg-white border-slate-250 shadow-sm hover:border-slate-300'
-                  }`}
+          loadingLeads ? (
+            <div className="flex flex-col gap-2">
+              <LeadSkeleton />
+              <LeadSkeleton />
+            </div>
+          ) : leads.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-6 px-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 gap-3">
+              <div className="text-center text-xs text-slate-400">
+                Nebyly nalezeny žádné živé kontakty v okolí pro okres "{searchRegion}".
+              </div>
+              <button
+                type="button"
+                onClick={() => setHasSearched(false)}
+                className="text-xs font-bold text-generali-red hover:underline bg-transparent border-0 cursor-pointer"
+              >
+                Upravit parametry vyhledávání
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <div className="flex justify-between items-center mb-1 px-1">
+                <span className="text-[10px] text-slate-400 font-semibold">
+                  Výsledky pro: <span className="font-bold text-slate-600">{searchRegion}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setHasSearched(false)}
+                  className="text-[10px] font-bold text-generali-red hover:underline bg-transparent border-0 cursor-pointer"
                 >
-                  <div className="flex justify-between items-start gap-2">
-                    <div>
-                      <h4 className={`font-bold text-xs ${isCalled ? 'text-slate-500 line-through' : 'text-slate-800'}`}>
-                        {lead.name}
-                      </h4>
-                      <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-0.5">
-                        <MapPin className="w-3 h-3 shrink-0" />
-                        <span className="truncate max-w-[150px]">{lead.address}</span>
+                  Upravit údaje
+                </button>
+              </div>
+
+              {leads.map((lead, idx) => {
+                const isCalled = lead.status === 'called' || lead.status === 'scheduled';
+                return (
+                  <div 
+                    key={idx}
+                    className={`p-3 rounded-xl border transition-all duration-200 ${
+                      isCalled 
+                        ? 'bg-slate-50/50 border-slate-150 opacity-75' 
+                        : 'bg-white border-slate-250 shadow-sm hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div>
+                        <h4 className={`font-bold text-xs ${isCalled ? 'text-slate-500 line-through' : 'text-slate-800'}`}>
+                          {lead.name}
+                        </h4>
+                        <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-0.5">
+                          <MapPin className="w-3 h-3 shrink-0" />
+                          <span className="truncate max-w-[150px]">{lead.address}</span>
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* Ověřit firmu na Google */}
+                        <a 
+                          href={`https://www.google.com/search?q=${encodeURIComponent(`${lead.name} ${lead.address} kontakt`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-bold text-slate-600 hover:text-slate-800 transition active:scale-95 flex items-center gap-1 cursor-pointer no-underline"
+                          title="Ověřit firmu na Google"
+                        >
+                          <Search className="w-3 h-3 text-slate-400" />
+                          <span>Ověřit</span>
+                        </a>
+
+                        {/* Telefonní dialer (pokud není 'Ověřit na Google') */}
+                        {lead.phone && lead.phone !== 'Ověřit na Google' ? (
+                          <a 
+                            href={`tel:${lead.phone}`}
+                            onClick={() => {
+                              if (!isCalled) handleUpdateLeadStatus(idx, 'called');
+                            }}
+                            className={`p-1.5 rounded-lg border text-white transition active:scale-95 flex items-center justify-center cursor-pointer no-underline ${
+                              isCalled 
+                                ? 'bg-slate-350 border-slate-350 hover:bg-slate-405 text-slate-100' 
+                                : 'bg-emerald-600 border-emerald-600 hover:bg-emerald-700 hover:border-emerald-700 shadow-sm shadow-emerald-500/10'
+                            }`}
+                            title={`Vytočit: ${lead.phone}`}
+                          >
+                            <Phone className="w-3.5 h-3.5" />
+                          </a>
+                        ) : null}
+
+                        {/* Stavové tlačítko */}
+                        <button
+                          onClick={() => handleUpdateLeadStatus(idx, isCalled ? 'new' : 'called')}
+                          className={`px-2 py-1.5 rounded-lg border text-[10px] font-bold transition active:scale-95 cursor-pointer ${
+                            isCalled 
+                              ? 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50' 
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+                          }`}
+                        >
+                          {isCalled ? 'Zavoláno' : 'Hotovo'}
+                        </button>
                       </div>
                     </div>
 
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-1 shrink-0">
-                      {/* Ověřit firmu na Google */}
-                      <a 
-                        href={`https://www.google.com/search?q=${encodeURIComponent(`${lead.name} ${lead.address} kontakt`)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-[10px] font-bold text-slate-600 hover:text-slate-800 transition active:scale-95 flex items-center gap-1 cursor-pointer"
-                        title="Ověřit firmu na Google"
-                      >
-                        <Search className="w-3 h-3 text-slate-400" />
-                        <span>Ověřit</span>
-                      </a>
+                    {lead.contact_person && (
+                      <div className="text-[10px] text-slate-500 font-semibold mt-1.5 bg-slate-50 px-2 py-0.5 rounded self-start inline-block">
+                        👤 {lead.contact_person}
+                      </div>
+                    )}
 
-                      {/* Telefonní dialer (pokud není 'Ověřit na Google') */}
-                      {lead.phone && lead.phone !== 'Ověřit na Google' ? (
-                        <a 
-                          href={`tel:${lead.phone}`}
-                          onClick={() => {
-                            if (!isCalled) handleUpdateLeadStatus(idx, 'called');
-                          }}
-                          className={`p-1.5 rounded-lg border text-white transition active:scale-95 flex items-center justify-center cursor-pointer ${
-                            isCalled 
-                              ? 'bg-slate-350 border-slate-350 hover:bg-slate-405 text-slate-100' 
-                              : 'bg-emerald-600 border-emerald-600 hover:bg-emerald-700 hover:border-emerald-700 shadow-sm shadow-emerald-500/10'
-                          }`}
-                          title={`Vytočit: ${lead.phone}`}
-                        >
-                          <Phone className="w-3.5 h-3.5" />
-                        </a>
-                      ) : null}
+                    {lead.website && lead.website !== 'Není k dispozici' && (
+                      <div className="text-[10px] text-slate-400 mt-1 truncate">
+                        🌐 <a href={lead.website.startsWith('http') ? lead.website : `https://${lead.website}`} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-slate-600 font-medium">{lead.website}</a>
+                      </div>
+                    )}
 
-                      {/* Stavové tlačítko */}
-                      <button
-                        onClick={() => handleUpdateLeadStatus(idx, isCalled ? 'new' : 'called')}
-                        className={`px-2 py-1.5 rounded-lg border text-[10px] font-bold transition active:scale-95 cursor-pointer ${
-                          isCalled 
-                            ? 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50' 
-                            : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-800'
-                        }`}
-                      >
-                        {isCalled ? 'Zavoláno' : 'Hotovo'}
-                      </button>
+                    <div className="text-[10px] text-slate-500 mt-2 border-t border-slate-100 pt-1.5 font-medium italic">
+                      💡 {lead.why_target}
                     </div>
                   </div>
-
-                  {lead.contact_person && (
-                    <div className="text-[10px] text-slate-500 font-semibold mt-1.5 bg-slate-50 px-2 py-0.5 rounded self-start inline-block">
-                      👤 {lead.contact_person}
-                    </div>
-                  )}
-
-                  {lead.website && lead.website !== 'Není k dispozici' && (
-                    <div className="text-[10px] text-slate-400 mt-1 truncate">
-                      🌐 <a href={lead.website.startsWith('http') ? lead.website : `https://${lead.website}`} target="_blank" rel="noopener noreferrer" className="hover:underline hover:text-slate-600 font-medium">{lead.website}</a>
-                    </div>
-                  )}
-
-                  <div className="text-[10px] text-slate-500 mt-2 border-t border-slate-100 pt-1.5 font-medium italic">
-                    💡 {lead.why_target}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )
         )}
       </div>
 
